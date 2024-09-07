@@ -11,7 +11,7 @@ pub struct ShellHelper<'vm> {
 }
 
 fn reverse_string(s: &mut String) {
-    let rev = s.chars().rev().collect();
+    let rev: String = s.chars().rev().collect();
     *s = rev;
 }
 
@@ -21,7 +21,7 @@ fn split_idents_on_dot(line: &str) -> Option<(usize, Vec<String>)> {
     for (i, c) in line.chars().rev().enumerate() {
         match c {
             '.' => {
-                // check for a double dot
+                // Handle consecutive dots (invalid case)
                 if i != 0 && words.last().map_or(false, |s| s.is_empty()) {
                     return None;
                 }
@@ -61,7 +61,6 @@ impl<'vm> ShellHelper<'vm> {
         &self,
         words: &'w [String],
     ) -> Option<(&'w str, impl Iterator<Item = PyResult<PyStrRef>> + 'vm)> {
-        // the very first word and then all the ones after the dot
         let (first, rest) = words.split_first().unwrap();
 
         let str_iter_method = |obj, name| {
@@ -70,11 +69,6 @@ impl<'vm> ShellHelper<'vm> {
         };
 
         let (word_start, iter1, iter2) = if let Some((last, parents)) = rest.split_last() {
-            // we need to get an attribute based off of the dir() of an object
-
-            // last: the last word, could be empty if it ends with a dot
-            // parents: the words before the dot
-
             let mut current = self.globals.get_item_opt(first.as_str(), self.vm).ok()??;
 
             for attr in parents {
@@ -83,18 +77,15 @@ impl<'vm> ShellHelper<'vm> {
             }
 
             let current_iter = str_iter_method(&current, identifier!(self.vm, __dir__)).ok()?;
-
             (last, current_iter, None)
         } else {
-            // we need to get a variable based off of globals/builtins
-
             let globals =
                 str_iter_method(self.globals.as_object(), identifier!(self.vm, keys)).ok()?;
             let builtins =
-                str_iter_method(self.vm.builtins.as_object(), identifier!(self.vm, __dir__))
-                    .ok()?;
+                str_iter_method(self.vm.builtins.as_object(), identifier!(self.vm, __dir__)).ok()?;
             (first, globals, Some(builtins))
         };
+
         Some((word_start, iter1.chain(iter2.into_iter().flatten())))
     }
 
@@ -111,20 +102,16 @@ impl<'vm> ShellHelper<'vm> {
             })
             .collect::<Result<Vec<_>, _>>()
             .ok()?;
+
         let mut completions = if word_start.starts_with('_') {
-            // if they're already looking for something starting with a '_', just give
-            // them all the completions
             all_completions
         } else {
-            // only the completions that don't start with a '_'
             let no_underscore = all_completions
                 .iter()
                 .filter(|&s| !s.as_str().starts_with('_'))
                 .cloned()
                 .collect::<Vec<_>>();
 
-            // if there are only completions that start with a '_', give them all of the
-            // completions, otherwise only the ones that don't start with '_'
             if no_underscore.is_empty() {
                 all_completions
             } else {
@@ -132,8 +119,7 @@ impl<'vm> ShellHelper<'vm> {
             }
         };
 
-        // sort the completions alphabetically
-        completions.sort_by(|a, b| std::cmp::Ord::cmp(a.as_str(), b.as_str()));
+        completions.sort_by(|a, b| a.as_str().cmp(b.as_str()));
 
         Some((
             startpos,
@@ -162,8 +148,6 @@ cfg_if::cfg_if! {
             ) -> rustyline::Result<(usize, Vec<String>)> {
                 Ok(self
                     .complete_opt(&line[0..pos])
-                    // as far as I can tell, there's no better way to do both completion
-                    // and indentation (or even just indentation)
                     .unwrap_or_else(|| (pos, vec!["\t".to_owned()])))
             }
         }
